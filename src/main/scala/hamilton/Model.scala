@@ -2,6 +2,7 @@ package hamilton
 
 import hamilton.Field.{isFinal, legalMoves}
 
+import Bind._
 import scala.collection.immutable.Seq
 
 /**
@@ -89,30 +90,67 @@ object Field {
 }
 
 /**
+  * Type constructor
+  * @tparam F (* -> *) container
+  */
+trait Bindable[F[_]] {
+  def flatMap1[A, B](v: Seq[A])(f: A => F[B]): F[B]
+  def bind[B](a: B): F[B]
+}
+
+/**
+  * Implementations for type constructor
+  */
+object Bind {
+  implicit val iterable: Bindable[Iterator] = new Bindable[Iterator] {
+    override def bind[B](a: B): Iterator[B] = Iterator.single(a)
+
+    override def flatMap1[A, B](v: Seq[A])(f: (A) => Iterator[B]): Iterator[B] = v.iterator.flatMap(f)
+  }
+
+  implicit val optional: Bindable[Option] = new Bindable[Option] {
+    override def flatMap1[A, B](v: Seq[A])(f: (A) => Option[B]): Option[B] = {
+      v.foldLeft[Option[B]](None)((x, y) => x.orElse(f(y)))
+    }
+
+    override def bind[B](a: B): Option[B] = Some(a)
+  }
+}
+
+/**
   * Traverse algorithm
   */
 object Traverse {
-  def traverseField(cell: Cell, field: Field, state: State): Iterator[State] = {
+
+  def traverseField[F[_]](cell: Cell, field: Field, state: State)(implicit b: Bindable[F]): F[State] = {
     if (isFinal(field, state)) {
-      Iterator.single(state)
+      b.bind(state)
     } else {
       val moves = legalMoves(cell, field, state)
 
-      val nextMoves: Iterator[(Cell, State, Int)] = moves.map(item => {
+      val nextMoves: Seq[(Cell, State, Int)] = moves.map(item => {
         val newState = state.move(item)
         val possibleMovesAmount = legalMoves(item, field, newState)
         (item, newState, possibleMovesAmount.size)
-      }).sortBy(_._3).toIterator
+      }).sortBy(_._3)
 
-      nextMoves.flatMap(x => traverseField(x._1, field, x._2))
+      b.flatMap1(nextMoves)(x => traverseField(x._1, field, x._2)(b))
     }
   }
 
-  def canTraverse(cell: Cell, field: Field): Boolean = {
-    Traverse.traverseField(cell, field, State.fromCell(cell)).take(1).toList.nonEmpty
+  def traverseFieldIterator(cell: Cell, field: Field, state: State): Iterator[State] = {
+    traverseField[Iterator](cell, field, state)
+  }
+
+  def traverseFieldOption(cell: Cell, field: Field, state: State): Option[State] = {
+    traverseField[Option](cell, field, state)
   }
 
   def findPath(cell: Cell, field: Field): Option[Seq[Cell]] = {
-    Traverse.traverseField(cell, field, State.fromCell(cell)).take(1).toList.headOption.map(_.path)
+    Traverse.traverseFieldIterator(cell, field, State.fromCell(cell)).take(1).toList.headOption.map(_.path)
+  }
+
+  def findPathOption(cell: Cell, field: Field): Option[Seq[Cell]] = {
+    Traverse.traverseFieldOption(cell, field, State.fromCell(cell)).map(_.path)
   }
 }
